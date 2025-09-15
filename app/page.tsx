@@ -15,7 +15,7 @@ import {
 // Note: We'll use window.ethereum.request directly for capabilities
 import Image from "next/image";
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useDisconnect, useAccount, useBalance, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
+import { useDisconnect, useAccount, useBalance, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, useConnect } from "wagmi";
 import { BASEMINER_ABI, CONTRACT_ADDRESS } from "../lib/contract";
 import { formatEther, parseEther } from "viem";
 import { base } from "wagmi/chains";
@@ -27,6 +27,7 @@ export default function App() {
   const { disconnect, connectors } = useDisconnect();
   const { isConnected, address, chainId, connector } = useAccount();
   const { switchChain } = useSwitchChain();
+  const { connect } = useConnect();
   
   // Base Account capabilities for sponsored gas
   const [hasPaymasterSupport, setHasPaymasterSupport] = useState(false);
@@ -39,6 +40,11 @@ export default function App() {
   
   // Copy notification state
   const [showCopyNotification, setShowCopyNotification] = useState(false);
+  
+  // Farcaster wallet auto-connection state
+  const [isFarcasterDetected, setIsFarcasterDetected] = useState(false);
+  const [autoConnectAttempted, setAutoConnectAttempted] = useState(false);
+  const [isAutoConnecting, setIsAutoConnecting] = useState(false);
   
   // Close tooltip when clicking outside
   useEffect(() => {
@@ -447,6 +453,56 @@ export default function App() {
     }
   }, []);
 
+  // Farcaster wallet auto-detection and connection
+  useEffect(() => {
+    const detectAndConnectFarcaster = async () => {
+      // Check if we're running inside Farcaster
+      const isInFarcaster = 
+        window.location.hostname.includes('farcaster') ||
+        window.location.hostname.includes('warpcast') ||
+        window.navigator.userAgent.includes('Farcaster') ||
+        window.navigator.userAgent.includes('Warpcast') ||
+        // Check for Farcaster-specific window properties
+        (window as unknown as { farcaster?: unknown }).farcaster ||
+        (window as unknown as { warpcast?: unknown }).warpcast ||
+        // Check for Farcaster frame context
+        (window as unknown as { parent?: unknown }).parent !== window;
+
+      if (isInFarcaster) {
+        console.log('🔍 Farcaster environment detected');
+        setIsFarcasterDetected(true);
+        
+        // Try to auto-connect to Farcaster wallet if not already connected
+        if (!isConnected && !autoConnectAttempted) {
+          setAutoConnectAttempted(true);
+          setIsAutoConnecting(true);
+          
+          try {
+            // Look for injected connector (Farcaster wallet)
+            const injectedConnector = connectors.find(conn => conn.type === 'injected');
+            
+            if (injectedConnector && window.ethereum) {
+              console.log('🔗 Attempting to connect to Farcaster wallet...');
+              await connect({ connector: injectedConnector });
+              console.log('✅ Farcaster wallet connected successfully');
+            } else {
+              console.log('⚠️ No injected wallet found in Farcaster environment');
+            }
+          } catch (error) {
+            console.log('❌ Failed to auto-connect Farcaster wallet:', error);
+          } finally {
+            setIsAutoConnecting(false);
+          }
+        }
+      } else {
+        console.log('🌐 Not running in Farcaster environment');
+        setIsFarcasterDetected(false);
+      }
+    };
+
+    detectAndConnectFarcaster();
+  }, [isConnected, connectors, connect, autoConnectAttempted]);
+
   // Auto-switch to Base Mainnet when connected
   useEffect(() => {
     if (isConnected && chainId && chainId !== base.id) {
@@ -796,11 +852,28 @@ Join me and start mining: ${referralLink}`;
                   {formatAddress(address)}
                 </button>
               ) : (
-                <Wallet className="z-10">
-                  <ConnectWallet>
-                    <Name className="text-white pixel-font" />
-                  </ConnectWallet>
-                </Wallet>
+                <div className="flex items-center space-x-2">
+                  {isFarcasterDetected && (
+                    <div className="flex items-center space-x-1 text-xs text-purple-400">
+                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                      </svg>
+                      <span>Farcaster</span>
+                    </div>
+                  )}
+                  {isAutoConnecting ? (
+                    <div className="bg-[#0927eb] text-white px-4 py-2 rounded-lg font-semibold text-sm min-w-[120px] inline-flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Connecting...
+                    </div>
+                  ) : (
+                    <Wallet className="z-10">
+                      <ConnectWallet>
+                        <Name className="text-white pixel-font" />
+                      </ConnectWallet>
+                    </Wallet>
+                  )}
+                </div>
               )}
             </div>
           </div>
