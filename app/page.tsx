@@ -448,8 +448,15 @@ export default function App() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const refParam = urlParams.get('ref');
+    console.log('🔗 Referral URL params:', { refParam, currentUrl: window.location.href });
+    
     if (refParam && refParam.startsWith('0x') && refParam.length === 42) {
+      console.log('✅ Valid referral address found:', refParam);
       setReferralAddress(refParam);
+    } else if (refParam) {
+      console.log('❌ Invalid referral address format:', refParam);
+    } else {
+      console.log('ℹ️ No referral parameter found');
     }
   }, []);
 
@@ -586,13 +593,21 @@ export default function App() {
   const handleMineGems = async () => {
     if (!address || !inputAmount || parseFloat(inputAmount) <= 0) return;
     
+    const referralToUse = referralAddress || address;
+    console.log('💰 Mining gems with referral:', { 
+      referralAddress, 
+      userAddress: address, 
+      referralToUse,
+      isUsingReferral: referralAddress && referralAddress !== address 
+    });
+    
     setIsMining(true);
     try {
       await writeContract({
         address: CONTRACT_ADDRESS,
         abi: BASEMINER_ABI,
         functionName: 'buyEggs',
-        args: [(referralAddress || address) as `0x${string}`], // Use referral from URL, fallback to self
+        args: [referralToUse as `0x${string}`], // Use referral from URL, fallback to self
         value: parseEther(inputAmount),
       });
     } catch (err) {
