@@ -12,6 +12,7 @@ import {
   ConnectWallet,
   Wallet,
 } from "@coinbase/onchainkit/wallet";
+// Note: We'll use window.ethereum.request directly for capabilities
 import Image from "next/image";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useDisconnect, useAccount, useBalance, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
@@ -24,41 +25,209 @@ export default function App() {
   const addFrame = useAddFrame();
   const { composeCast } = useComposeCast();
   const { disconnect, connectors } = useDisconnect();
-  const { isConnected, address, chainId } = useAccount();
+  const { isConnected, address, chainId, connector } = useAccount();
   const { switchChain } = useSwitchChain();
+  
+  // Base Account capabilities for sponsored gas
+  const [hasPaymasterSupport, setHasPaymasterSupport] = useState(false);
+  
+  // Tooltip state for rewards precision
+  const [showRewardsTooltip, setShowRewardsTooltip] = useState(false);
+  
+  // TVL breakdown dropdown state
+  const [showTVLBreakdown, setShowTVLBreakdown] = useState(false);
+  
+  // Copy notification state
+  const [showCopyNotification, setShowCopyNotification] = useState(false);
+  
+  // Close tooltip when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (showRewardsTooltip) {
+        setShowRewardsTooltip(false);
+      }
+    };
+    
+    if (showRewardsTooltip) {
+      document.addEventListener('click', handleClickOutside);
+    }
+    
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [showRewardsTooltip]);
+  
+  // Manual capability check function
+  const checkCapabilitiesManually = async () => {
+    if (!address) {
+      alert('Please connect your wallet first');
+      return;
+    }
+    
+    // Try to get the wallet provider from wagmi connector
+    let walletProvider = null;
+    
+    // First try to get from wagmi connector
+    if (connector?.getProvider) {
+      try {
+        walletProvider = await connector.getProvider();
+        console.log('🔗 Using wagmi connector provider:', walletProvider);
+      } catch (error) {
+        console.log('Failed to get provider from connector:', error);
+      }
+    }
+    // Fallback to window.ethereum
+    if (!walletProvider && window.ethereum) {
+      walletProvider = window.ethereum;
+      console.log('🔗 Using window.ethereum provider:', walletProvider);
+    }
+    
+    if (!walletProvider) {
+      alert('No wallet provider detected. Please ensure your wallet is properly connected.');
+      return;
+    }
+    
+    try {
+      console.log('🔍 Manually checking capabilities for:', address);
+      console.log('🔗 Wallet provider:', walletProvider);
+      
+      const capabilities = await walletProvider.request({
+        method: 'wallet_getCapabilities',
+        params: [address]
+      });
+      
+      console.log('📋 Capabilities response:', capabilities);
+      
+      const baseCapabilities = capabilities?.['0x2105'];
+      const paymasterService = baseCapabilities?.paymasterService;
+      const supported = paymasterService?.supported;
+      
+      console.log('🔗 Base capabilities:', baseCapabilities);
+      console.log('⛽ Paymaster service:', paymasterService);
+      console.log('✅ Supported:', supported);
+      
+      if (supported) {
+        setHasPaymasterSupport(true);
+        alert('✅ Sponsored gas is available! Gas-free transactions enabled.');
+      } else {
+        setHasPaymasterSupport(false);
+        alert('❌ Sponsored gas not available. Using regular transactions.');
+      }
+      
+    } catch (error) {
+      const errorCode = (error as Error & { code?: number }).code;
+      console.error('❌ Capability check failed:', error);
+      
+      if (errorCode === 4100) {
+        alert('❌ Capabilities check not authorized. Please enable permissions in your wallet settings.');
+      } else if (errorCode === 4200) {
+        alert('❌ wallet_getCapabilities not supported by this wallet version.');
+      } else {
+        alert('❌ Error checking capabilities: ' + (error as Error).message);
+      }
+      
+      setHasPaymasterSupport(false);
+    }
+  };
+  
+    // Check capabilities when address changes
+    useEffect(() => {
+      const checkCapabilities = async () => {
+        if (!address) {
+          setHasPaymasterSupport(false);
+          return;
+        }
+        
+        // Try to get the wallet provider from wagmi connector
+        let walletProvider = null;
+        
+        // First try to get from wagmi connector
+        if (connector?.getProvider) {
+          try {
+            walletProvider = await connector.getProvider();
+            console.log('🔗 Auto-check using wagmi connector provider:', walletProvider);
+          } catch (error) {
+            console.log('Failed to get provider from connector:', error);
+          }
+        }
+        // Fallback to window.ethereum
+        if (!walletProvider && window.ethereum) {
+          walletProvider = window.ethereum;
+          console.log('🔗 Auto-check using window.ethereum provider:', walletProvider);
+        }
+        
+        if (!walletProvider) {
+          console.log('No wallet provider detected - skipping capability check');
+          setHasPaymasterSupport(false);
+          return;
+        }
+        
+        try {
+          const capabilities = await walletProvider.request({
+            method: 'wallet_getCapabilities',
+            params: [address]
+          });
+          
+          const paymasterSupport = capabilities?.['0x2105']?.paymasterService?.supported;
+          setHasPaymasterSupport(!!paymasterSupport);
+          
+          console.log('Paymaster support:', paymasterSupport);
+          console.log('Full capabilities:', capabilities);
+        } catch (error) {
+          // Handle different types of errors gracefully
+          const errorCode = (error as Error & { code?: number }).code;
+          
+          if (errorCode === 4100) {
+            // User hasn't authorized capabilities check - this is normal
+            console.log('Capabilities check not authorized by user - using regular transactions');
+            setHasPaymasterSupport(false);
+          } else if (errorCode === 4200) {
+            // Method not supported by wallet
+            console.log('wallet_getCapabilities not supported by this wallet');
+            setHasPaymasterSupport(false);
+          } else {
+            // Other errors
+            console.log('Error checking capabilities:', error);
+            setHasPaymasterSupport(false);
+          }
+        }
+      };
+      
+      checkCapabilities();
+    }, [address, connector]);
   
   // Contract interaction hooks
   const { data: walletBalanceData, refetch: refetchWalletBalance } = useBalance({
     address: address,
     query: {
-      refetchInterval: 5000, // Refetch every 5 seconds
+      refetchInterval: 30000, // Refetch every 30 seconds (reduced to avoid rate limits)
     },
   });
   
-  const { data: contractBalanceData, refetch: refetchContractBalance } = useBalance({
-    address: CONTRACT_ADDRESS,
-    query: {
-      refetchInterval: 5000, // Refetch every 5 seconds
-    },
-  });
   
-  const { data: userMiners, refetch: refetchUserMiners } = useReadContract({
+  const { data: userMiners, refetch: refetchUserMiners, error: userMinersError } = useReadContract({
     address: CONTRACT_ADDRESS,
     abi: BASEMINER_ABI,
     functionName: 'getMyMiners',
     args: address ? [address] : undefined,
     query: {
-      refetchInterval: 5000, // Refetch every 5 seconds
+      enabled: !!address,
+      refetchInterval: 30000, // Refetch every 30 seconds (reduced to avoid rate limits)
+      retry: 3, // Retry failed requests
+      retryDelay: 5000, // Wait 5 seconds between retries
     },
   });
   
-  const { data: userEggs, refetch: refetchUserEggs } = useReadContract({
+  const { data: userEggs, refetch: refetchUserEggs, error: userEggsError } = useReadContract({
     address: CONTRACT_ADDRESS,
     abi: BASEMINER_ABI,
     functionName: 'getMyEggs',
     args: address ? [address] : undefined,
     query: {
-      refetchInterval: 5000, // Refetch every 5 seconds
+      enabled: !!address,
+      refetchInterval: 30000, // Refetch every 30 seconds (reduced to avoid rate limits)
+      retry: 3, // Retry failed requests
+      retryDelay: 5000, // Wait 5 seconds between retries
     },
   });
 
@@ -70,7 +239,7 @@ export default function App() {
     args: userEggs ? [userEggs] : undefined,
     query: {
       enabled: !!userEggs && !!address,
-      refetchInterval: 5000, // Refetch every 5 seconds
+      refetchInterval: 30000, // Refetch every 30 seconds (reduced to avoid rate limits)
     },
   });
   // Get last hatch time for countdown
@@ -80,7 +249,38 @@ export default function App() {
     functionName: 'lastHatch',
     args: address ? [address] : undefined,
     query: {
+      enabled: !!address,
       refetchInterval: 5000,
+    },
+  });
+
+  // Get total TVL (ETH + Aave)
+  const { data: totalBalanceData, refetch: refetchTotalBalance } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: BASEMINER_ABI,
+    functionName: 'getTotalBalance',
+    query: {
+      refetchInterval: 30000, // Refetch every 30 seconds (reduced to avoid rate limits)
+    },
+  });
+
+  // Get balance breakdown (ETH vs Aave)
+  const { data: balanceBreakdown, refetch: refetchBalanceBreakdown } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: BASEMINER_ABI,
+    functionName: 'getBalanceBreakdown',
+    query: {
+      refetchInterval: 30000, // Refetch every 30 seconds (reduced to avoid rate limits)
+    },
+  });
+
+  // Get total Aave deposits (for yield tracking)
+  const { data: totalAaveDeposits, refetch: refetchTotalAaveDeposits } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: BASEMINER_ABI,
+    functionName: 'totalAaveDeposits',
+    query: {
+      refetchInterval: 30000, // Refetch every 30 seconds (reduced to avoid rate limits)
     },
   });
 
@@ -94,6 +294,8 @@ export default function App() {
   const [isMining, setIsMining] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
   const [isSelling, setIsSelling] = useState(false);
+  const [isSponsoredHatching, setIsSponsoredHatching] = useState(false);
+  const [sponsoredTxHash, setSponsoredTxHash] = useState<string | null>(null);
   
   // Info modal state
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
@@ -104,11 +306,13 @@ export default function App() {
       // Refetch all user data with a small delay to ensure contract state is updated
       setTimeout(() => {
         refetchWalletBalance();
-        refetchContractBalance();
         refetchUserMiners();
         refetchUserEggs();
         refetchEggValue();
         refetchLastHatch();
+        refetchTotalBalance();
+        refetchBalanceBreakdown();
+        refetchTotalAaveDeposits();
         
         // Second refetch for egg value to ensure it gets updated data
         setTimeout(() => {
@@ -116,7 +320,7 @@ export default function App() {
         }, 500);
       }, 1000); // 1 second delay
     }
-  }, [isConfirmed, refetchWalletBalance, refetchContractBalance, refetchUserMiners, refetchUserEggs, refetchEggValue, refetchLastHatch]);
+  }, [isConfirmed, refetchWalletBalance, refetchUserMiners, refetchUserEggs, refetchEggValue, refetchLastHatch, refetchTotalBalance, refetchBalanceBreakdown, refetchTotalAaveDeposits]);
 
   const [frameAdded, setFrameAdded] = useState(false);
   const [inputAmount, setInputAmount] = useState("0");
@@ -128,14 +332,36 @@ export default function App() {
   
   // Real-time data from contract
   const walletBalance = walletBalanceData ? formatEther(walletBalanceData.value) : "0";
-  const contractBalance = contractBalanceData ? formatEther(contractBalanceData.value) : "0";
+  const totalTVL = totalBalanceData ? formatEther(totalBalanceData) : "0";
+
   const userGems = userMiners ? userMiners.toString() : "0";
+  
+  // Balance breakdown data
+  const ethBalance = balanceBreakdown ? formatEther(balanceBreakdown[0]) : "0";
+  const aaveBalance = balanceBreakdown ? formatEther(balanceBreakdown[1]) : "0";
+  // Fixed allocation percentages (80% Aave, 20% Reserve) - kept for future use
+  // const aavePercentage = 80; // Fixed target allocation
+  // const reservePercentage = 20; // Fixed target allocation
+  
+  // Yield calculation (current Aave balance - total deposits = earned yield)
+  const totalDeposits = totalAaveDeposits ? formatEther(totalAaveDeposits) : "0";
+  const earnedYield = parseFloat(aaveBalance) - parseFloat(totalDeposits);
   
   // Loading states for individual values
   const isLoadingWalletBalance = !walletBalanceData && isConnected;
-  const isLoadingContractBalance = !contractBalanceData;
-  const isLoadingUserData = !userMiners && !userEggs && isConnected;
+  const isLoadingTotalTVL = !totalBalanceData;
+  const isLoadingUserData = isConnected && (userMiners === undefined || userEggs === undefined);
   const isLoadingRewards = !eggValue && !lastKnownRewards && isConnected;
+  
+  // Debug rate limit errors
+  useEffect(() => {
+    if (userMinersError) {
+      console.error('User Miners Error:', userMinersError);
+    }
+    if (userEggsError) {
+      console.error('User Eggs Error:', userEggsError);
+    }
+  }, [userMinersError, userEggsError]);
   
   // Calculate user rewards with fallback and preserve last known value
   const currentRewards = eggValue ? formatEther(eggValue) : "0";
@@ -300,6 +526,105 @@ export default function App() {
     }
   };
 
+  // Sponsored hatching function using paymaster service
+  const handleSponsoredHatch = async () => {
+    if (!address || !hasPaymasterSupport) return;
+    
+    // Check if user has eggs to hatch
+    if (!userEggs || userEggs === BigInt(0)) {
+      console.log('❌ No eggs to hatch, falling back to regular transaction');
+      await handleRefineGems();
+      return;
+    }
+    
+    console.log('🥚 User has eggs to hatch:', userEggs.toString());
+    setIsSponsoredHatching(true);
+    setSponsoredTxHash(null);
+    
+    try {
+      // Get wallet provider
+      let walletProvider = null;
+      if (connector?.getProvider) {
+        try {
+          walletProvider = await connector.getProvider();
+        } catch (error) {
+          console.log('Failed to get provider from connector:', error);
+        }
+      }
+      if (!walletProvider && window.ethereum) {
+        walletProvider = window.ethereum;
+      }
+      
+      if (!walletProvider) {
+        console.log('No wallet provider detected - falling back to regular transaction');
+        await handleRefineGems();
+        return;
+      }
+      
+      console.log('🚀 Executing sponsored transaction...');
+      
+      const result = await walletProvider.request({
+        method: 'wallet_sendCalls',
+        params: [{
+          version: "1.0",
+          chainId: "0x2105",
+          from: address,
+          calls: [{
+            to: CONTRACT_ADDRESS,
+            value: "0x0",
+            data: "0x2296459e" // hatchEggs() function selector
+          }],
+          capabilities: {
+            paymasterService: {
+              url: "https://api.developer.coinbase.com/rpc/v1/base/mfOtCv7khgJXeeBl3el6YNvAbJcngkXU"
+            }
+          }
+        }]
+      });
+      
+      console.log('✅ Sponsored hatch transaction submitted:', result);
+      setSponsoredTxHash(result);
+      
+      // Refetch data after successful sponsored transaction
+      setTimeout(() => {
+        refetchUserMiners();
+        refetchUserEggs();
+        refetchEggValue();
+        refetchTotalBalance();
+        refetchBalanceBreakdown();
+        refetchTotalAaveDeposits();
+        console.log('🔄 Data refetched after sponsored transaction');
+      }, 2000);
+      
+    } catch (err) {
+      console.error('❌ Error with sponsored hatching:', err);
+      
+      // Handle different error types
+      const errorCode = (err as Error & { code?: number }).code;
+      const errorMessage = (err as Error).message;
+      
+      if (errorCode === 4100) {
+        console.log('🚫 Paymaster service not supported by wallet');
+      } else if (errorCode === 4200) {
+        console.log('❌ Invalid paymaster URL or unreachable');
+      } else if (errorCode === 4300) {
+        console.log('❌ Paymaster service returned an error or is unavailable');
+      } else if (errorCode === 5700) {
+        console.log('❌ Paymaster capability required but wallet doesn\'t support it');
+      } else if (errorMessage?.includes('paymaster')) {
+        console.log('❌ Paymaster-specific error:', errorMessage);
+      } else {
+        console.log('❌ Other error occurred:', err);
+      }
+      
+      // Fallback to regular transaction
+      console.log('🔄 Falling back to regular transaction');
+      await handleRefineGems();
+    } finally {
+      setIsSponsoredHatching(false);
+    }
+  };
+
   const handleSellGems = async () => {
     if (!address) return;
     
@@ -322,7 +647,7 @@ export default function App() {
   const handleShareReferral = () => {
     if (!address) return;
     
-    const referralLink = `https://baseminer.app/ref/${address}`;
+    const referralLink = `https://basemine.fun/ref/${address}`;
     const shareText = `🎮 Just discovered BaseMiner - the ultimate mining game on Base! 
     
 ⛏️ Mine gems, refine them, and earn ETH rewards
@@ -414,15 +739,27 @@ Join me and start mining: ${referralLink}`;
                   {/* Information Display */}
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
-                      <span className="text-white font-semibold text-sm tracking-wide">CONTRACT</span>
+                      <span className="text-white font-semibold text-sm tracking-wide">TOTAL TVL</span>
                       <span className="text-white font-semibold text-sm">Loading...</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-blue-300 font-medium text-[10px] tracking-wide">├─ Aave</span>
+                      <span className="text-blue-300 font-medium text-[10px]">Loading...</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-yellow-300 font-medium text-[10px] tracking-wide">├─ Yield</span>
+                      <span className="text-yellow-300 font-medium text-[10px]">Loading...</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-green-300 font-medium text-[10px] tracking-wide">└─ Reserve</span>
+                      <span className="text-green-300 font-medium text-[10px]">Loading...</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-white font-semibold text-sm tracking-wide">WALLET</span>
                       <span className="text-white font-semibold text-sm">Loading...</span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-white font-semibold text-sm tracking-wide">YOUR GEMS</span>
+                      <span className="text-white font-semibold text-sm tracking-wide">GEMS</span>
                       <span className="text-white font-semibold text-sm">Loading...</span>
                     </div>
                   </div>
@@ -477,20 +814,53 @@ Join me and start mining: ${referralLink}`;
                 {/* Information Display */}
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-white font-semibold text-sm tracking-wide">CONTRACT</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-white font-semibold text-sm tracking-wide">TOTAL TVL</span>
+                      <button
+                        onClick={() => setShowTVLBreakdown(!showTVLBreakdown)}
+                        className="text-gray-400 hover:text-white transition-colors cursor-pointer"
+                        title="Click to expand breakdown"
+                      >
+                        <svg 
+                          className={`w-4 h-4 transition-transform duration-200 ${showTVLBreakdown ? 'rotate-180' : ''}`} 
+                          fill="currentColor" 
+                          viewBox="0 0 20 20"
+                        >
+                          <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    </div>
                     <span className="text-white font-semibold text-sm">
-                      {isLoadingContractBalance ? 'Loading...' : `${parseFloat(contractBalance).toFixed(3)} ETH`}
+                      {isLoadingTotalTVL ? 'Loading...' : `${parseFloat(totalTVL).toFixed(3)} ETH`}
                     </span>
                   </div>
+                  
+                  {/* Collapsible TVL Breakdown */}
+                  {showTVLBreakdown && (
+                    <div className="space-y-2 pl-4 border-l-2 border-gray-600">
+                      <div className="flex justify-between items-center">
+                        <span className="text-blue-300 font-medium text-[10px] tracking-wide">├─ Aave</span>
+                        <span className="text-blue-300 font-medium text-[10px]">
+                          {isLoadingTotalTVL ? 'Loading...' : `${(parseFloat(aaveBalance) - earnedYield).toFixed(3)} ETH`}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-green-300 font-medium text-[10px] tracking-wide">└─ Reserve</span>
+                        <span className="text-green-300 font-medium text-[10px]">
+                          {isLoadingTotalTVL ? 'Loading...' : `${parseFloat(ethBalance).toFixed(3)} ETH`}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex justify-between items-center">
-                    <span className="text-white font-semibold text-sm tracking-wide">WALLET</span>
-                    <span className="text-white font-semibold text-sm">
+                    <span className="text-white font-medium text-xs tracking-wide">WALLET</span>
+                    <span className="text-white font-medium text-xs">
                       {isLoadingWalletBalance ? 'Loading...' : `${parseFloat(walletBalance).toFixed(3)} ETH`}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-white font-semibold text-sm tracking-wide">YOUR GEMS</span>
-                    <span className="text-white font-semibold text-sm">
+                    <span className="text-white font-medium text-xs tracking-wide">GEMS</span>
+                    <span className="text-white font-medium text-xs">
                       {isLoadingUserData ? 'Loading...' : `${userGems} GEMS`}
                     </span>
                   </div>
@@ -537,18 +907,44 @@ Join me and start mining: ${referralLink}`;
                 {/* Rewards Section */}
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-white font-medium">YOUR REWARDS</span>
-                    <span className="text-white font-medium">
-                      {isLoadingRewards ? 'Loading...' : `${truncateTo4Decimals(userRewards)} ETH`}
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-white font-medium">REWARDS</span>
+                      <button
+                        onClick={() => setShowRewardsTooltip(!showRewardsTooltip)}
+                        className="text-gray-400 hover:text-white transition-colors cursor-pointer"
+                        title="Click to see full precision"
+                      >
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <span className="text-white font-medium">
+                        {isLoadingRewards ? 'Loading...' : `${truncateTo4Decimals(userRewards)} ETH`}
+                      </span>
+                      
+                      {/* Tooltip */}
+                      {showRewardsTooltip && (
+                        <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-3 py-2 bg-gray-900 text-white text-sm rounded-lg shadow-lg border border-gray-700 whitespace-nowrap z-20">
+                          <div className="text-center">
+                            <div className="font-mono text-xs">
+                              {isLoadingRewards ? 'Loading...' : `${parseFloat(userRewards).toFixed(8)} ETH`}
+                            </div>
+                          </div>
+                          {/* Arrow */}
+                          <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900"></div>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Action Buttons */}
                   <div className="grid grid-cols-2 gap-3">
                     <button 
-                      onClick={handleRefineGems}
-                      disabled={!isConnected || isRefining || !isHatchReady}
-                      className="bg-[#0927eb] hover:bg-[#0820d1] disabled:bg-gray-500 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors pixel-font" 
+                      onClick={hasPaymasterSupport ? handleSponsoredHatch : handleRefineGems}
+                      disabled={!isConnected || isRefining || isSponsoredHatching || !isHatchReady}
+                      className="bg-[#0927eb] hover:bg-[#0820d1] disabled:bg-gray-500 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors pixel-font"
                       style={{ fontSize: '10px' }}
                     >
                       <div className="w-full h-full flex items-center justify-center" style={{ 
@@ -556,7 +952,7 @@ Join me and start mining: ${referralLink}`;
                         letterSpacing: '0.5px',
                         textShadow: 'none'
                       }}>
-                        {isRefining ? 'REFINING...' : 
+                        {isRefining || isSponsoredHatching ? 'REFINING...' : 
                          isHatchReady ? 'REFINE GEMS' : formatCountdown(timeUntilHatch)}
                       </div>
                     </button>
@@ -577,24 +973,25 @@ Join me and start mining: ${referralLink}`;
             <div className="bg-[#2d2d2d] backdrop-blur-md rounded-xl shadow-lg border border-[var(--app-card-border)] overflow-hidden">
               <div className="p-5 space-y-4 pixel-font">
                 <div className="text-center">
-                  <h3 className="text-white font-semibold text-sm tracking-wide mb-3">YOUR REFERRAL LINK</h3>
+                  <h3 className="text-white font-semibold text-sm tracking-wide mb-3">REFERRAL LINK</h3>
                   <div className="bg-gray-800 rounded-lg p-3 mb-3">
                     <p className="text-gray-300 text-xs break-all">
-                      {address ? `https://baseminer.app/ref/${address}` : 'Connect wallet to get your referral link'}
+                      {address ? `https://basemine.fun/ref/${address}` : 'Connect wallet to get your referral link'}
                     </p>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <button 
                       onClick={() => {
                         if (address) {
-                          navigator.clipboard.writeText(`https://baseminer.app/ref/${address}`);
-                          // You can add a toast notification here
+                          navigator.clipboard.writeText(`https://basemine.fun/ref/${address}`);
+                          setShowCopyNotification(true);
+                          setTimeout(() => setShowCopyNotification(false), 2000); // Hide after 2 seconds
                         }
                       }}
                       disabled={!address}
                       className="bg-[#0927eb] hover:bg-[#0820d1] disabled:bg-gray-500 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors text-xs"
                     >
-                      COPY LINK
+                      {showCopyNotification ? 'COPIED!' : 'COPY LINK'}
                     </button>
                     <button 
                       onClick={handleShareReferral}
@@ -645,15 +1042,42 @@ Join me and start mining: ${referralLink}`;
                 <div>
                   <h3 className="font-semibold text-white mb-2">⛏️&nbsp;&nbsp;Mine Gems</h3>
                   <p className="text-gray-300">
-                    Deposit ETH to buy gems. The more you invest, the more gems you get. Market grows by 20% on each buy.
+                    Deposit ETH to buy gems. The more you invest, the more gems you get.
                   </p>
                 </div>
                 
                 <div>
                   <h3 className="font-semibold text-white mb-2">🔧&nbsp;&nbsp;Refine Gems</h3>
                   <p className="text-gray-300">
-                    Convert gems into miners that generate more gems over time. 1-hour cooldown between refinements. Market grows by 8% on each refinement.
+                    Convert gems into miners that generate more gems over time. 1-hour cooldown between refinements. Market grows by 0.167% on each refinement (4% daily).
                   </p>
+                  {hasPaymasterSupport && (
+                    <div className="mt-2 p-2 bg-green-900/20 border border-green-500/30 rounded-lg">
+                      <p className="text-green-400 text-sm font-medium">
+                        🎉 Gas-free hatching available! Your transactions are sponsored.
+                      </p>
+                    </div>
+                  )}
+                  {!hasPaymasterSupport && address && (
+                    <div className="mt-2 p-2 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                      <p className="text-blue-400 text-sm font-medium">
+                        💡 Regular gas transactions will be used. Sponsored gas may be available with compatible wallets.
+                      </p>
+                      <button
+                        onClick={checkCapabilitiesManually}
+                        className="mt-2 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded transition-colors"
+                      >
+                        🔍 Check Sponsored Gas Support
+                      </button>
+                    </div>
+                  )}
+                  {sponsoredTxHash && (
+                    <div className="mt-2 p-2 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                      <p className="text-blue-400 text-sm">
+                        ✅ Sponsored transaction: <a href={`https://basescan.org/tx/${sponsoredTxHash}`} target="_blank" rel="noopener noreferrer" className="underline">{sponsoredTxHash.slice(0, 10)}...</a>
+                      </p>
+                    </div>
+                  )}
                 </div>
                 
                 <div>
@@ -682,6 +1106,16 @@ Join me and start mining: ${referralLink}`;
                   <p className="text-gray-300">
                     Daily withdrawal limits and dynamic fees protect against whale attacks and ensure sustainable growth.
                   </p>
+                </div>
+                
+                <div>
+                  <h3 className="font-semibold text-yellow-400 mb-2">⚠️&nbsp;&nbsp;Disclaimer</h3>
+                  <div className="text-gray-300 text-sm space-y-2">
+                    <p><strong className="text-yellow-400">Risk Warning:</strong> This is a game with financial elements. Only invest what you can afford to lose.</p>
+                    <p><strong className="text-yellow-400">No Guarantees:</strong> Returns are not guaranteed and may fluctuate based on market conditions.</p>
+                    <p><strong className="text-yellow-400">DYOR:</strong> Always do your own research before participating in any DeFi protocols.</p>
+                    <p><strong className="text-yellow-400">Smart Contract Risk:</strong> This protocol uses smart contracts that may contain bugs or vulnerabilities.</p>
+                  </div>
                 </div>
               </div>
             </div>

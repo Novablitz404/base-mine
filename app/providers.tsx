@@ -17,7 +17,10 @@ const config = createConfig({
     injected(), // For Farcaster wallet
   ],
   transports: {
-    [base.id]: http(),
+    [base.id]: http("https://mainnet.base.org", {
+      batch: true, // Enable request batching
+      retryCount: 3, // Retry failed requests
+    }),
   },
 });
 

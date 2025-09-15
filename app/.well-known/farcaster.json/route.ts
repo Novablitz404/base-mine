@@ -21,7 +21,7 @@ export async function GET() {
       signature: process.env.FARCASTER_SIGNATURE,
     },
     baseBuilder: {
-    allowedAddresses: ["0xEFA1a1b3CCbF5Ef5Bb81e17209591D3D77C520E8"]
+    allowedAddresses: ["0xf03F1C599D1508314328294DaBbb226Ce3Bf663C"]
     },
     frame: withValidProperties({
       version: "1",
@@ -35,12 +35,13 @@ export async function GET() {
       homeUrl: URL,
       webhookUrl: `${URL}/api/webhook`,
       primaryCategory: process.env.NEXT_PUBLIC_APP_PRIMARY_CATEGORY,
-      tags: [],
+      tags: ["onchain","finance","aave","base"],
       heroImageUrl: process.env.NEXT_PUBLIC_APP_HERO_IMAGE,
       tagline: process.env.NEXT_PUBLIC_APP_TAGLINE,
       ogTitle: process.env.NEXT_PUBLIC_APP_OG_TITLE,
       ogDescription: process.env.NEXT_PUBLIC_APP_OG_DESCRIPTION,
       ogImageUrl: process.env.NEXT_PUBLIC_APP_OG_IMAGE,
+      castShareUrl: "https://basemine.fun",
     }),
   });
 }
