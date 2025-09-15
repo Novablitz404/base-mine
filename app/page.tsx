@@ -456,17 +456,30 @@ export default function App() {
   // Farcaster wallet auto-detection and connection
   useEffect(() => {
     const detectAndConnectFarcaster = async () => {
-      // Check if we're running inside Farcaster
+      console.log('🔍 Checking for Farcaster environment...');
+      console.log('📍 Current URL:', window.location.href);
+      console.log('🌐 User Agent:', window.navigator.userAgent);
+      console.log('🔗 Available connectors:', connectors.map(c => ({ type: c.type, name: c.name })));
+      console.log('💰 window.ethereum:', !!window.ethereum);
+      
+      // More comprehensive Farcaster detection
       const isInFarcaster = 
         window.location.hostname.includes('farcaster') ||
         window.location.hostname.includes('warpcast') ||
+        window.location.hostname.includes('farcaster.xyz') ||
+        window.location.hostname.includes('warpcast.com') ||
         window.navigator.userAgent.includes('Farcaster') ||
         window.navigator.userAgent.includes('Warpcast') ||
         // Check for Farcaster-specific window properties
         (window as unknown as { farcaster?: unknown }).farcaster ||
         (window as unknown as { warpcast?: unknown }).warpcast ||
         // Check for Farcaster frame context
-        (window as unknown as { parent?: unknown }).parent !== window;
+        (window as unknown as { parent?: unknown }).parent !== window ||
+        // Check for Farcaster-specific meta tags or scripts
+        document.querySelector('meta[name="farcaster"]') !== null ||
+        document.querySelector('script[src*="farcaster"]') !== null;
+
+      console.log('🎯 Farcaster detection result:', isInFarcaster);
 
       if (isInFarcaster) {
         console.log('🔍 Farcaster environment detected');
@@ -478,18 +491,41 @@ export default function App() {
           setIsAutoConnecting(true);
           
           try {
-            // Look for injected connector (Farcaster wallet)
+            // Wait a bit for the wallet to be ready
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Look for Farcaster-specific connector first, then generic injected
+            const farcasterConnector = connectors.find(conn => 
+              conn.name === 'Farcaster Wallet' || 
+              (conn.type === 'injected' && conn.name?.toLowerCase().includes('farcaster'))
+            );
             const injectedConnector = connectors.find(conn => conn.type === 'injected');
             
-            if (injectedConnector && window.ethereum) {
-              console.log('🔗 Attempting to connect to Farcaster wallet...');
-              await connect({ connector: injectedConnector });
-              console.log('✅ Farcaster wallet connected successfully');
+            console.log('🔌 Found Farcaster connector:', !!farcasterConnector);
+            console.log('🔌 Found injected connector:', !!injectedConnector);
+            
+            const connectorToUse = farcasterConnector || injectedConnector;
+            
+            if (connectorToUse && window.ethereum) {
+              console.log('🔗 Attempting to connect to wallet...');
+              console.log('🔌 Connector details:', {
+                type: connectorToUse.type,
+                name: connectorToUse.name,
+                id: connectorToUse.id
+              });
+              
+              await connect({ connector: connectorToUse });
+              console.log('✅ Wallet connected successfully');
             } else {
-              console.log('⚠️ No injected wallet found in Farcaster environment');
+              console.log('⚠️ No suitable wallet connector found');
+              console.log('🔌 Available connectors:', connectors.map(c => ({ name: c.name, type: c.type })));
             }
           } catch (error) {
             console.log('❌ Failed to auto-connect Farcaster wallet:', error);
+            console.log('🔍 Error details:', {
+              message: (error as Error).message,
+              stack: (error as Error).stack
+            });
           } finally {
             setIsAutoConnecting(false);
           }
@@ -500,7 +536,9 @@ export default function App() {
       }
     };
 
-    detectAndConnectFarcaster();
+    // Add a small delay to ensure everything is loaded
+    const timer = setTimeout(detectAndConnectFarcaster, 500);
+    return () => clearTimeout(timer);
   }, [isConnected, connectors, connect, autoConnectAttempted]);
 
   // Auto-switch to Base Mainnet when connected
@@ -865,6 +903,39 @@ Join me and start mining: ${referralLink}`;
                     <div className="bg-[#0927eb] text-white px-4 py-2 rounded-lg font-semibold text-sm min-w-[120px] inline-flex items-center justify-center">
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                       Connecting...
+                    </div>
+                  ) : !isConnected ? (
+                    <div className="flex flex-col space-y-2">
+                      {isFarcasterDetected && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              // Try Farcaster Mini App connector first
+                              const farcasterConnector = connectors.find(conn =>
+                                conn.name?.toLowerCase().includes('farcaster') ||
+                                conn.name?.toLowerCase().includes('mini app')
+                              );
+                              
+                              if (farcasterConnector) {
+                                await connect({ connector: farcasterConnector });
+                              } else {
+                                // Fallback to first available connector
+                                await connect({ connector: connectors[0] });
+                              }
+                            } catch (error) {
+                              console.error('Failed to connect wallet:', error);
+                            }
+                          }}
+                          className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+                        >
+                          Connect Farcaster Wallet
+                        </button>
+                      )}
+                      <Wallet className="z-10">
+                        <ConnectWallet>
+                          <Name className="text-white pixel-font" />
+                        </ConnectWallet>
+                      </Wallet>
                     </div>
                   ) : (
                     <Wallet className="z-10">

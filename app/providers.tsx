@@ -5,16 +5,18 @@ import { WagmiProvider, createConfig, http } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MiniKitProvider } from "@coinbase/onchainkit/minikit";
 import { coinbaseWallet, injected } from "wagmi/connectors";
+import { farcasterMiniApp as miniAppConnector } from '@farcaster/miniapp-wagmi-connector';
 import { base } from "wagmi/chains";
 
-// Create wagmi config with only MiniKit-compatible connectors
+// Create wagmi config with both Farcaster and Coinbase Smart Wallet support
 const config = createConfig({
   chains: [base],
   connectors: [
     coinbaseWallet({
       appName: process.env.NEXT_PUBLIC_ONCHAINKIT_PROJECT_NAME || "BaseMiner",
     }),
-    injected(), // For Farcaster wallet
+    miniAppConnector(), // Official Farcaster Mini App connector
+    injected(), // Generic injected wallet fallback
   ],
   transports: {
     [base.id]: http("https://mainnet.base.org", {
